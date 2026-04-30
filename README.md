@@ -38,7 +38,7 @@ err := r.Insert(ctx, "users", &user)
 
 // Find all
 var users []User
-err = r.Find(ctx, "users", &users, nil)
+err = r.Find(ctx, "users", &users, "")
 
 // First matching row
 var found User

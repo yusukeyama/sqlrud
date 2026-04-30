@@ -38,7 +38,7 @@ func main() {
 
 	// Find all
 	var users []User
-	if err := r.Find(ctx, "users", &users, nil); err != nil {
+	if err := r.Find(ctx, "users", &users, ""); err != nil {
 		log.Fatal(err)
 	}
 	fmt.Println("users:", users)
@@ -51,7 +51,7 @@ func main() {
 	fmt.Println("found:", found)
 
 	// Count
-	count, err := r.Count(ctx, "users", "", nil)
+	count, err := r.Count(ctx, "users", "")
 	if err != nil {
 		log.Fatal(err)
 	}

@@ -34,16 +34,17 @@ func (r *Rudder) First(ctx context.Context, table string, dest any, where string
 }
 
 // Find queries table for all rows matching where and scans them into dest
-// (pointer to a slice of structs).
-func (r *Rudder) Find(ctx context.Context, table string, dest any, where *string, whereArgs ...any) error {
+// (pointer to a slice of structs). Pass an empty string for where to return
+// all rows.
+func (r *Rudder) Find(ctx context.Context, table string, dest any, where string, whereArgs ...any) error {
 	quotedTable, err := quoteIdentifier(r.dialect, table)
 	if err != nil {
 		return err
 	}
 
 	var q string
-	if where != nil && *where != "" {
-		q = fmt.Sprintf("SELECT * FROM %s WHERE %s", quotedTable, *where)
+	if where != "" {
+		q = fmt.Sprintf("SELECT * FROM %s WHERE %s", quotedTable, where)
 	} else {
 		q = fmt.Sprintf("SELECT * FROM %s", quotedTable)
 	}

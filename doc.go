@@ -20,7 +20,7 @@
 //
 //	// Find all
 //	var users []User
-//	err = r.Find(ctx, "users", &users, nil)
+//	err = r.Find(ctx, "users", &users, "")
 //
 //	// Update
 //	err = r.Update(ctx, "users", &user, "id = ?", user.ID)
