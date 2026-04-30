@@ -150,18 +150,10 @@ func (r *Rudder) Count(ctx context.Context, table string, where string, whereArg
 		q = fmt.Sprintf("SELECT COUNT(*) FROM %s", quotedTable)
 	}
 
-	rows, err := r.db.QueryContext(ctx, q, whereArgs...)
-	if err != nil {
-		return 0, err
-	}
-	defer rows.Close()
-
-	if !rows.Next() {
-		return 0, rows.Err()
-	}
 	var count int64
-	if err := rows.Scan(&count); err != nil {
+	row := r.db.QueryRowxContext(ctx, q, whereArgs...)
+	if err := row.Scan(&count); err != nil {
 		return 0, err
 	}
-	return count, rows.Err()
+	return count, nil
 }
