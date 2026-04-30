@@ -201,16 +201,20 @@ func (client *Client) TransactionOptions(ctx context.Context, options *sql.TxOpt
 			_ = tx.Rollback()
 			panic(recovered)
 		}
+		if err != nil {
+			rollbackErr := tx.Rollback()
+			if rollbackErr != nil && !errors.Is(rollbackErr, sql.ErrTxDone) {
+				err = errors.Join(err, rollbackErr)
+			}
+		}
 	}()
 
-	if err := fn(txClient); err != nil {
-		if rollbackErr := tx.Rollback(); rollbackErr != nil {
-			return errors.Join(err, rollbackErr)
-		}
+	if err = fn(txClient); err != nil {
 		return err
 	}
 
-	return tx.Commit()
+	err = tx.Commit()
+	return err
 }
 
 func (client *Client) rebind(query string) string {

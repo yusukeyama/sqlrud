@@ -167,6 +167,32 @@ func TestTransactionRollsBackOnError(t *testing.T) {
 	assertExpectations(t, mock)
 }
 
+func TestTransactionRollsBackOnPanic(t *testing.T) {
+	client, mock, cleanup := newMockClient(t)
+	defer cleanup()
+
+	mock.ExpectBegin()
+	mock.ExpectExec(regexp.QuoteMeta("INSERT INTO users (name, email) VALUES (?, ?)")).
+		WithArgs("Yusuke", "y@example.com").
+		WillReturnResult(sqlmock.NewResult(1, 1))
+	mock.ExpectRollback()
+
+	defer func() {
+		recovered := recover()
+		if recovered != "stop" {
+			t.Fatalf("expected panic %q, got %v", "stop", recovered)
+		}
+		assertExpectations(t, mock)
+	}()
+
+	_ = client.Transaction(context.Background(), func(tx *Client) error {
+		if err := tx.Create(context.Background(), &testUser{Name: "Yusuke", Email: "y@example.com"}); err != nil {
+			return err
+		}
+		panic("stop")
+	})
+}
+
 func newMockClient(t *testing.T) (*Client, sqlmock.Sqlmock, func()) {
 	t.Helper()
 
