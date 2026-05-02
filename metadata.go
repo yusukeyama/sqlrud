@@ -67,6 +67,24 @@ func modelInfoForStructDestination(destination any) (*modelInfo, error) {
 	return modelInfoForType(typ)
 }
 
+func modelInfoForStructDestinationValue(destination any) (*modelInfo, reflect.Value, error) {
+	value := reflect.ValueOf(destination)
+	if !value.IsValid() || value.Kind() != reflect.Pointer || value.IsNil() {
+		return nil, reflect.Value{}, ErrInvalidDestination
+	}
+
+	value = value.Elem()
+	if value.Kind() != reflect.Struct {
+		return nil, reflect.Value{}, ErrInvalidDestination
+	}
+
+	info, err := modelInfoForType(value.Type())
+	if err != nil {
+		return nil, reflect.Value{}, err
+	}
+	return info, value, nil
+}
+
 func modelInfoForSliceDestination(destination any) (*modelInfo, error) {
 	value := reflect.ValueOf(destination)
 	if !value.IsValid() || value.Kind() != reflect.Pointer || value.IsNil() {

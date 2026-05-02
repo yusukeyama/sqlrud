@@ -30,24 +30,23 @@ func New(db *sqlx.DB) *Client {
 	}
 }
 
-// First loads one record into destination.
-func (client *Client) First(ctx context.Context, destination any, options ...QueryOption) error {
-	info, err := modelInfoForStructDestination(destination)
+// First loads one record by the primary key values set on destination.
+func (client *Client) First(ctx context.Context, destination any) error {
+	info, value, err := modelInfoForStructDestinationValue(destination)
 	if err != nil {
 		return err
 	}
 
-	queryOptions, err := collectOptions(options)
+	filters, args, ok, err := primaryFilters(info, value)
 	if err != nil {
 		return err
 	}
-	limit := 1
-	queryOptions.limit = &limit
+	if !ok {
+		return ErrMissingPrimaryValue
+	}
 
-	query, args, err := buildSelect(info, queryOptions)
-	if err != nil {
-		return err
-	}
+	query := fmt.Sprintf("SELECT %s FROM %s WHERE %s LIMIT ?", strings.Join(info.selectColumns(), ", "), info.table, strings.Join(filters, " AND "))
+	args = append(args, 1)
 
 	return sqlx.GetContext(ctx, client.ext, destination, client.rebind(query), args...)
 }

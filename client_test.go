@@ -26,12 +26,12 @@ func TestFirst(t *testing.T) {
 	defer cleanup()
 
 	rows := sqlmock.NewRows([]string{"id", "name", "email"}).AddRow(int64(1), "Yusuke", "y@example.com")
-	mock.ExpectQuery(regexp.QuoteMeta("SELECT id, name, email FROM users WHERE email = ? LIMIT ?")).
-		WithArgs("y@example.com", 1).
+	mock.ExpectQuery(regexp.QuoteMeta("SELECT id, name, email FROM users WHERE id = ? LIMIT ?")).
+		WithArgs(int64(1), 1).
 		WillReturnRows(rows)
 
-	var user testUser
-	if err := client.First(context.Background(), &user, Where("Email", Eq("y@example.com"))); err != nil {
+	user := testUser{ID: 1}
+	if err := client.First(context.Background(), &user); err != nil {
 		t.Fatalf("First returned error: %v", err)
 	}
 
@@ -39,6 +39,16 @@ func TestFirst(t *testing.T) {
 		t.Fatalf("unexpected user: %+v", user)
 	}
 	assertExpectations(t, mock)
+}
+
+func TestFirstRequiresPrimaryKeyValue(t *testing.T) {
+	client, _, cleanup := newMockClient(t)
+	defer cleanup()
+
+	var user testUser
+	if err := client.First(context.Background(), &user); !errors.Is(err, ErrMissingPrimaryValue) {
+		t.Fatalf("expected ErrMissingPrimaryValue, got %v", err)
+	}
 }
 
 func TestFind(t *testing.T) {

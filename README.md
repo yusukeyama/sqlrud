@@ -51,9 +51,9 @@ client := sqlrud.New(db)
 Then use the client in the same way for either database:
 
 ```go
-
 var user User
-err := client.First(ctx, &user, sqlrud.Where("Email", sqlrud.Eq("y@example.com")))
+user.ID = 1
+err := client.First(ctx, &user)
 
 var users []User
 err = client.Find(
@@ -74,7 +74,7 @@ err = client.CreateOrUpdate(ctx, &user)
 err = client.Delete(ctx, &user)
 ```
 
-`First` and `Find` accept field names (`Email`) or column names (`email`) in conditions. Supported predicates are `Eq`, `NotEq`, `Gt`, `Gte`, `Lt`, `Lte`, `Like`, `In`, `NotIn`, `IsNull`, and `IsNotNull`.
+`First` loads a record by primary key. `Find` accepts field names (`Email`) or column names (`email`) in conditions. Supported predicates are `Eq`, `NotEq`, `Gt`, `Gte`, `Lt`, `Lte`, `Like`, `In`, `NotIn`, `IsNull`, and `IsNotNull`.
 
 ## Transactions
 
