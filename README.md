@@ -1,8 +1,12 @@
 # sqlrud
 
-Small CRUD helper for [sqlx](https://github.com/jmoiron/sqlx).
+Small CRUD helper for `database/sql`-style applications.
 
-`sqlrud` is a thin wrapper that keeps query strings out of everyday CRUD code while still using `database/sql` and `sqlx` underneath.
+`sqlrud` keeps query strings out of everyday CRUD code while using `database/sql` and [sqlx](https://github.com/jmoiron/sqlx) underneath for execution, scanning, and placeholder binding.
+
+## Requirements
+
+- Go 1.22 or later
 
 ## Install
 
