@@ -80,6 +80,51 @@ err = client.Delete(ctx, &user)
 
 `First` loads a record by primary key. `Find` accepts field names (`Email`) or column names (`email`) in conditions. Supported predicates are `Eq`, `NotEq`, `Gt`, `Gte`, `Lt`, `Lte`, `Like`, `In`, `NotIn`, `IsNull`, and `IsNotNull`.
 
+## Nullable columns
+
+Use `database/sql` nullable types or pointer fields for nullable columns.
+
+```go
+type User struct {
+	ID        int64           `db:"id,auto_increment,primary_key"`
+	Name      sql.NullString  `db:"name"`
+	Age       sql.NullInt64   `db:"age"`
+	Score     sql.NullFloat64 `db:"score"`
+	Active    sql.NullBool    `db:"active"`
+	BirthDate sql.NullTime    `db:"birth_date"`
+}
+```
+
+Go 1.22 or later also supports generic nullable values with `sql.Null[T]`.
+
+```go
+type User struct {
+	ID       int64            `db:"id,auto_increment,primary_key"`
+	Nickname sql.Null[string] `db:"nickname"`
+	Age      sql.Null[int64]  `db:"age"`
+	Active   sql.Null[bool]   `db:"active"`
+}
+```
+
+You can also use pointer fields when that better fits your model.
+
+```go
+type User struct {
+	ID     int64   `db:"id,auto_increment,primary_key"`
+	Email  *string `db:"email"`
+	Age    *int64  `db:"age"`
+	Active *bool   `db:"active"`
+}
+```
+
+Use `IsNull` or `IsNotNull` when filtering by `NULL`.
+
+```go
+err := client.Find(ctx, &users, sqlrud.Where("Email", sqlrud.IsNull()))
+```
+
+`Eq(nil)` generates `= ?`, so use `IsNull()` for SQL `NULL` checks.
+
 ## Transactions
 
 Pass an anonymous function to `Transaction`. Returning an error rolls back; returning `nil` commits.

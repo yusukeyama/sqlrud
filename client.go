@@ -265,6 +265,10 @@ func updateColumns(info *modelInfo, value reflect.Value) ([]string, []any) {
 }
 
 func mutationWhere(info *modelInfo, value reflect.Value, options queryOptions) (string, []any, error) {
+	if err := options.validateMutation(); err != nil {
+		return "", nil, err
+	}
+
 	if len(options.filters) > 0 {
 		return buildWhere(info, options.filters)
 	}

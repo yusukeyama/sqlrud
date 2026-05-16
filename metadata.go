@@ -151,6 +151,7 @@ func buildModelInfo(typ reflect.Type) (*modelInfo, error) {
 		table:  table,
 		byName: make(map[string]fieldInfo),
 	}
+	columns := make(map[string]fieldInfo)
 
 	for index := 0; index < typ.NumField(); index++ {
 		field := typ.Field(index)
@@ -171,6 +172,10 @@ func buildModelInfo(typ reflect.Type) (*modelInfo, error) {
 		if !validIdentifier(column) {
 			return nil, fmt.Errorf("%w: column %q", ErrInvalidIdentifier, column)
 		}
+		columnKey := strings.ToLower(column)
+		if existing, ok := columns[columnKey]; ok {
+			return nil, fmt.Errorf("%w: %s used by %s and %s", ErrDuplicateColumn, column, existing.name, field.Name)
+		}
 
 		options := dbTag.options.merge(compatOptions)
 		fieldInfo := fieldInfo{
@@ -185,6 +190,7 @@ func buildModelInfo(typ reflect.Type) (*modelInfo, error) {
 			omitEmpty:  options.has("omitempty", "omit_empty"),
 		}
 
+		columns[columnKey] = fieldInfo
 		info.fields = append(info.fields, fieldInfo)
 		if fieldInfo.primary {
 			info.primary = append(info.primary, fieldInfo)
@@ -203,10 +209,11 @@ func buildModelInfo(typ reflect.Type) (*modelInfo, error) {
 	}
 
 	for _, field := range info.fields {
-		info.byName[field.name] = field
-		info.byName[strings.ToLower(field.name)] = field
-		info.byName[field.column] = field
-		info.byName[strings.ToLower(field.column)] = field
+		for _, name := range []string{field.name, strings.ToLower(field.name), field.column, strings.ToLower(field.column)} {
+			if err := info.addFieldName(name, field); err != nil {
+				return nil, err
+			}
+		}
 	}
 
 	return info, nil
@@ -248,6 +255,18 @@ func (info *modelInfo) resolveColumn(name string) (string, error) {
 		return "", fmt.Errorf("%w: %s", ErrUnknownField, name)
 	}
 	return field.column, nil
+}
+
+func (info *modelInfo) addFieldName(name string, field fieldInfo) error {
+	existing, ok := info.byName[name]
+	if ok {
+		if reflect.DeepEqual(existing.index, field.index) {
+			return nil
+		}
+		return fmt.Errorf("%w: %s resolves to both %s and %s", ErrAmbiguousField, name, existing.name, field.name)
+	}
+	info.byName[name] = field
+	return nil
 }
 
 type dbTag struct {

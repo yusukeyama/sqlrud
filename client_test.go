@@ -21,6 +21,18 @@ func (testUser) TableName() string {
 	return "users"
 }
 
+type duplicateColumnUser struct {
+	ID           int64  `db:"id,primary_key"`
+	Email        string `db:"email"`
+	PrimaryEmail string `db:"email"`
+}
+
+type ambiguousLookupUser struct {
+	ID       int64  `db:"id,primary_key"`
+	Name     string `db:"full_name"`
+	FullName string `db:"name"`
+}
+
 func TestFirst(t *testing.T) {
 	client, mock, cleanup := newMockClient(t)
 	defer cleanup()
@@ -103,6 +115,32 @@ func TestUpdate(t *testing.T) {
 	assertExpectations(t, mock)
 }
 
+func TestUpdateRejectsUnsupportedMutationOption(t *testing.T) {
+	client, _, cleanup := newMockClient(t)
+	defer cleanup()
+
+	user := testUser{ID: 1, Name: "Yusuke", Email: "new@example.com"}
+	err := client.Update(context.Background(), &user, Limit(1))
+	if !errors.Is(err, ErrUnsupportedOption) {
+		t.Fatalf("expected ErrUnsupportedOption, got %v", err)
+	}
+}
+
+func TestUpdateAllowsWhereOption(t *testing.T) {
+	client, mock, cleanup := newMockClient(t)
+	defer cleanup()
+
+	mock.ExpectExec(regexp.QuoteMeta("UPDATE users SET name = ?, email = ? WHERE email = ?")).
+		WithArgs("Yusuke", "new@example.com", "old@example.com").
+		WillReturnResult(sqlmock.NewResult(0, 1))
+
+	user := testUser{Name: "Yusuke", Email: "new@example.com"}
+	if err := client.Update(context.Background(), &user, Where("Email", Eq("old@example.com"))); err != nil {
+		t.Fatalf("Update returned error: %v", err)
+	}
+	assertExpectations(t, mock)
+}
+
 func TestCreateOrUpdateUpdatesExistingRecord(t *testing.T) {
 	client, mock, cleanup := newMockClient(t)
 	defer cleanup()
@@ -149,6 +187,32 @@ func TestDelete(t *testing.T) {
 
 	user := testUser{ID: 1}
 	if err := client.Delete(context.Background(), &user); err != nil {
+		t.Fatalf("Delete returned error: %v", err)
+	}
+	assertExpectations(t, mock)
+}
+
+func TestDeleteRejectsUnsupportedMutationOption(t *testing.T) {
+	client, _, cleanup := newMockClient(t)
+	defer cleanup()
+
+	user := testUser{ID: 1}
+	err := client.Delete(context.Background(), &user, OrderBy("ID", Desc))
+	if !errors.Is(err, ErrUnsupportedOption) {
+		t.Fatalf("expected ErrUnsupportedOption, got %v", err)
+	}
+}
+
+func TestDeleteAllowsWhereOption(t *testing.T) {
+	client, mock, cleanup := newMockClient(t)
+	defer cleanup()
+
+	mock.ExpectExec(regexp.QuoteMeta("DELETE FROM users WHERE email = ?")).
+		WithArgs("y@example.com").
+		WillReturnResult(sqlmock.NewResult(0, 1))
+
+	var user testUser
+	if err := client.Delete(context.Background(), &user, Where("Email", Eq("y@example.com"))); err != nil {
 		t.Fatalf("Delete returned error: %v", err)
 	}
 	assertExpectations(t, mock)
@@ -201,6 +265,26 @@ func TestTransactionRollsBackOnPanic(t *testing.T) {
 		}
 		panic("stop")
 	})
+}
+
+func TestModelRejectsDuplicateColumn(t *testing.T) {
+	client, _, cleanup := newMockClient(t)
+	defer cleanup()
+
+	err := client.Create(context.Background(), &duplicateColumnUser{ID: 1})
+	if !errors.Is(err, ErrDuplicateColumn) {
+		t.Fatalf("expected ErrDuplicateColumn, got %v", err)
+	}
+}
+
+func TestModelRejectsAmbiguousFieldLookup(t *testing.T) {
+	client, _, cleanup := newMockClient(t)
+	defer cleanup()
+
+	err := client.Create(context.Background(), &ambiguousLookupUser{ID: 1})
+	if !errors.Is(err, ErrAmbiguousField) {
+		t.Fatalf("expected ErrAmbiguousField, got %v", err)
+	}
 }
 
 func newMockClient(t *testing.T) (*Client, sqlmock.Sqlmock, func()) {

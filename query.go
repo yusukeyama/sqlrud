@@ -160,6 +160,19 @@ func collectOptions(queryOptionsList []QueryOption) (queryOptions, error) {
 	return options, nil
 }
 
+func (options queryOptions) validateMutation() error {
+	if len(options.orders) > 0 {
+		return fmt.Errorf("%w: OrderBy is only supported by Find", ErrUnsupportedOption)
+	}
+	if options.limit != nil {
+		return fmt.Errorf("%w: Limit is only supported by Find", ErrUnsupportedOption)
+	}
+	if options.offset != nil {
+		return fmt.Errorf("%w: Offset is only supported by Find", ErrUnsupportedOption)
+	}
+	return nil
+}
+
 func buildSelect(info *modelInfo, options queryOptions) (string, []any, error) {
 	query := fmt.Sprintf("SELECT %s FROM %s", strings.Join(info.selectColumns(), ", "), info.table)
 	where, args, err := buildWhere(info, options.filters)
