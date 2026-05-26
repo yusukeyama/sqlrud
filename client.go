@@ -16,6 +16,7 @@ type Client struct {
 	db       *sqlx.DB
 	ext      sqlx.ExtContext
 	bindType int
+	dialect  dialect
 }
 
 // New creates a Client that executes queries through db.
@@ -23,10 +24,12 @@ func New(db *sqlx.DB) *Client {
 	if db == nil {
 		panic("sqlrud: nil *sqlx.DB")
 	}
+	driverName := db.DriverName()
 	return &Client{
 		db:       db,
 		ext:      db,
-		bindType: sqlx.BindType(db.DriverName()),
+		bindType: sqlx.BindType(driverName),
+		dialect:  dialectForDriver(driverName),
 	}
 }
 
@@ -125,14 +128,14 @@ func (client *Client) Update(ctx context.Context, model any, options ...QueryOpt
 	return err
 }
 
-// CreateOrUpdate inserts model when its primary key is empty or no row exists, otherwise it updates the existing row.
+// CreateOrUpdate inserts model or atomically updates it on primary key conflict.
 func (client *Client) CreateOrUpdate(ctx context.Context, model any) error {
 	info, value, err := modelInfoForValue(model)
 	if err != nil {
 		return err
 	}
 
-	filters, args, ok, err := primaryFilters(info, value)
+	_, _, ok, err := primaryFilters(info, value)
 	if err != nil {
 		return err
 	}
@@ -140,15 +143,18 @@ func (client *Client) CreateOrUpdate(ctx context.Context, model any) error {
 		return client.Create(ctx, model)
 	}
 
-	query := fmt.Sprintf("SELECT 1 FROM %s WHERE %s LIMIT 1", info.table, strings.Join(filters, " AND "))
-	var exists int
-	err = sqlx.GetContext(ctx, client.ext, &exists, client.rebind(query), args...)
-	if err == nil {
-		return client.Update(ctx, model)
+	insertColumns, insertArgs := createColumns(info, value)
+	if len(insertColumns) == 0 {
+		return ErrNoColumns
 	}
-	if errors.Is(err, sql.ErrNoRows) {
-		return client.Create(ctx, model)
+
+	setColumns, updateArgs := updateColumns(info, value)
+	query, args, err := client.buildUpsert(info, insertColumns, insertArgs, setColumns, updateArgs)
+	if err != nil {
+		return err
 	}
+
+	_, err = client.ext.ExecContext(ctx, client.rebind(query), args...)
 	return err
 }
 
@@ -193,6 +199,7 @@ func (client *Client) TransactionOptions(ctx context.Context, options *sql.TxOpt
 		db:       client.db,
 		ext:      tx,
 		bindType: client.bindType,
+		dialect:  client.dialect,
 	}
 
 	defer func() {
@@ -221,6 +228,87 @@ func (client *Client) rebind(query string) string {
 		return query
 	}
 	return sqlx.Rebind(client.bindType, query)
+}
+
+type dialect string
+
+const (
+	dialectUnknown  dialect = ""
+	dialectPostgres dialect = "postgres"
+	dialectMySQL    dialect = "mysql"
+)
+
+func dialectForDriver(driverName string) dialect {
+	switch strings.ToLower(driverName) {
+	case "postgres", "pgx":
+		return dialectPostgres
+	case "mysql":
+		return dialectMySQL
+	default:
+		return dialectUnknown
+	}
+}
+
+func (client *Client) buildUpsert(info *modelInfo, insertColumns []string, insertArgs []any, setColumns []string, updateArgs []any) (string, []any, error) {
+	switch client.dialect {
+	case dialectPostgres:
+		return buildPostgresUpsert(info, insertColumns, setColumns), appendArgs(insertArgs, updateArgs), nil
+	case dialectMySQL:
+		return buildMySQLUpsert(info, insertColumns, setColumns), appendArgs(insertArgs, updateArgs), nil
+	default:
+		return "", nil, ErrUnsupportedDialect
+	}
+}
+
+func buildPostgresUpsert(info *modelInfo, insertColumns []string, setColumns []string) string {
+	query := insertQuery(info, insertColumns)
+	query += fmt.Sprintf(" ON CONFLICT (%s)", strings.Join(primaryColumns(info), ", "))
+
+	if len(setColumns) == 0 {
+		return query + " DO NOTHING"
+	}
+
+	return query + " DO UPDATE SET " + strings.Join(assignments(setColumns), ", ")
+}
+
+func buildMySQLUpsert(info *modelInfo, insertColumns []string, setColumns []string) string {
+	query := insertQuery(info, insertColumns)
+	if len(setColumns) == 0 {
+		return query + fmt.Sprintf(" ON DUPLICATE KEY UPDATE %s = %s", info.primary[0].column, info.primary[0].column)
+	}
+
+	return query + " ON DUPLICATE KEY UPDATE " + strings.Join(assignments(setColumns), ", ")
+}
+
+func appendArgs(first []any, second []any) []any {
+	args := make([]any, 0, len(first)+len(second))
+	args = append(args, first...)
+	args = append(args, second...)
+	return args
+}
+
+func insertQuery(info *modelInfo, columns []string) string {
+	placeholders := make([]string, len(columns))
+	for index := range placeholders {
+		placeholders[index] = "?"
+	}
+	return fmt.Sprintf("INSERT INTO %s (%s) VALUES (%s)", info.table, strings.Join(columns, ", "), strings.Join(placeholders, ", "))
+}
+
+func assignments(columns []string) []string {
+	sets := make([]string, 0, len(columns))
+	for _, column := range columns {
+		sets = append(sets, column+" = ?")
+	}
+	return sets
+}
+
+func primaryColumns(info *modelInfo) []string {
+	columns := make([]string, 0, len(info.primary))
+	for _, field := range info.primary {
+		columns = append(columns, field.column)
+	}
+	return columns
 }
 
 func createColumns(info *modelInfo, value reflect.Value) ([]string, []any) {

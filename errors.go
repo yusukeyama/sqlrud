@@ -15,4 +15,5 @@ var (
 	ErrUnknownField        = errors.New("sqlrud: unknown field")
 	ErrEmptyIn             = errors.New("sqlrud: IN predicate requires at least one value")
 	ErrUnsupportedOption   = errors.New("sqlrud: unsupported option")
+	ErrUnsupportedDialect  = errors.New("sqlrud: unsupported dialect")
 )

@@ -155,6 +155,7 @@ err := client.Transaction(ctx, func(tx *sqlrud.Client) error {
 ## Notes
 
 - `Update` and `Delete` require either a non-zero primary key value or explicit `Where` conditions.
-- `CreateOrUpdate` checks existence by primary key. If the primary key is zero, it performs `Create`.
-- `CreateOrUpdate` is implemented as a read followed by create or update, not as a database-native upsert.
+- `CreateOrUpdate` uses a database-native atomic upsert for PostgreSQL and MySQL. If the primary key is zero, it performs `Create`.
+- `CreateOrUpdate` requires the database to enforce the relevant primary or unique key constraint. PostgreSQL uses the model primary key as the conflict target; MySQL may update on any primary or unique key conflict.
+- `CreateOrUpdate` returns `ErrUnsupportedDialect` for unsupported drivers.
 - SQL identifiers come from struct metadata and are validated before query execution.

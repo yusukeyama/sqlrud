@@ -2,7 +2,6 @@ package sqlrud
 
 import (
 	"context"
-	"database/sql"
 	"errors"
 	"regexp"
 	"testing"
@@ -31,6 +30,37 @@ type ambiguousLookupUser struct {
 	ID       int64  `db:"id,primary_key"`
 	Name     string `db:"full_name"`
 	FullName string `db:"name"`
+}
+
+type upsertTaggedUser struct {
+	ID        int64  `db:"id,primary_key"`
+	Name      string `db:"name"`
+	CreatedAt string `db:"created_at,createonly"`
+	UpdatedAt string `db:"updated_at,updateonly"`
+	Ignored   string `db:"ignored,readonly"`
+	Nickname  string `db:"nickname,omitempty"`
+}
+
+func (upsertTaggedUser) TableName() string {
+	return "users"
+}
+
+type membership struct {
+	OrgID  int64  `db:"org_id,primary_key"`
+	UserID int64  `db:"user_id,primary_key"`
+	Role   string `db:"role"`
+}
+
+func (membership) TableName() string {
+	return "memberships"
+}
+
+type primaryOnlyUser struct {
+	ID int64 `db:"id,primary_key"`
+}
+
+func (primaryOnlyUser) TableName() string {
+	return "users"
 }
 
 func TestFirst(t *testing.T) {
@@ -141,16 +171,13 @@ func TestUpdateAllowsWhereOption(t *testing.T) {
 	assertExpectations(t, mock)
 }
 
-func TestCreateOrUpdateUpdatesExistingRecord(t *testing.T) {
-	client, mock, cleanup := newMockClient(t)
+func TestCreateOrUpdateUsesPostgresAtomicUpsert(t *testing.T) {
+	client, mock, cleanup := newMockClientWithDriver(t, "postgres")
 	defer cleanup()
 
-	mock.ExpectQuery(regexp.QuoteMeta("SELECT 1 FROM users WHERE id = ? LIMIT 1")).
-		WithArgs(int64(1)).
-		WillReturnRows(sqlmock.NewRows([]string{"exists"}).AddRow(1))
-	mock.ExpectExec(regexp.QuoteMeta("UPDATE users SET name = ?, email = ? WHERE id = ?")).
-		WithArgs("Yusuke", "new@example.com", int64(1)).
-		WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectExec(regexp.QuoteMeta("INSERT INTO users (id, name, email) VALUES ($1, $2, $3) ON CONFLICT (id) DO UPDATE SET name = $4, email = $5")).
+		WithArgs(int64(1), "Yusuke", "new@example.com", "Yusuke", "new@example.com").
+		WillReturnResult(sqlmock.NewResult(1, 1))
 
 	user := testUser{ID: 1, Name: "Yusuke", Email: "new@example.com"}
 	if err := client.CreateOrUpdate(context.Background(), &user); err != nil {
@@ -159,18 +186,108 @@ func TestCreateOrUpdateUpdatesExistingRecord(t *testing.T) {
 	assertExpectations(t, mock)
 }
 
-func TestCreateOrUpdateCreatesMissingRecord(t *testing.T) {
+func TestCreateOrUpdateUsesMySQLAtomicUpsert(t *testing.T) {
+	client, mock, cleanup := newMockClientWithDriver(t, "mysql")
+	defer cleanup()
+
+	mock.ExpectExec(regexp.QuoteMeta("INSERT INTO users (id, name, email) VALUES (?, ?, ?) ON DUPLICATE KEY UPDATE name = ?, email = ?")).
+		WithArgs(int64(1), "Yusuke", "new@example.com", "Yusuke", "new@example.com").
+		WillReturnResult(sqlmock.NewResult(1, 1))
+
+	user := testUser{ID: 1, Name: "Yusuke", Email: "new@example.com"}
+	if err := client.CreateOrUpdate(context.Background(), &user); err != nil {
+		t.Fatalf("CreateOrUpdate returned error: %v", err)
+	}
+	assertExpectations(t, mock)
+}
+
+func TestCreateOrUpdateCreatesWhenPrimaryKeyIsZero(t *testing.T) {
 	client, mock, cleanup := newMockClient(t)
 	defer cleanup()
 
-	mock.ExpectQuery(regexp.QuoteMeta("SELECT 1 FROM users WHERE id = ? LIMIT 1")).
-		WithArgs(int64(1)).
-		WillReturnError(sql.ErrNoRows)
-	mock.ExpectExec(regexp.QuoteMeta("INSERT INTO users (id, name, email) VALUES (?, ?, ?)")).
-		WithArgs(int64(1), "Yusuke", "y@example.com").
+	mock.ExpectExec(regexp.QuoteMeta("INSERT INTO users (name, email) VALUES (?, ?)")).
+		WithArgs("Yusuke", "y@example.com").
 		WillReturnResult(sqlmock.NewResult(1, 1))
 
+	user := testUser{Name: "Yusuke", Email: "y@example.com"}
+	if err := client.CreateOrUpdate(context.Background(), &user); err != nil {
+		t.Fatalf("CreateOrUpdate returned error: %v", err)
+	}
+	assertExpectations(t, mock)
+}
+
+func TestCreateOrUpdateRejectsUnsupportedDialect(t *testing.T) {
+	client, mock, cleanup := newMockClient(t)
+	defer cleanup()
+
 	user := testUser{ID: 1, Name: "Yusuke", Email: "y@example.com"}
+	err := client.CreateOrUpdate(context.Background(), &user)
+	if !errors.Is(err, ErrUnsupportedDialect) {
+		t.Fatalf("expected ErrUnsupportedDialect, got %v", err)
+	}
+	assertExpectations(t, mock)
+}
+
+func TestCreateOrUpdateHonorsColumnWriteOptions(t *testing.T) {
+	client, mock, cleanup := newMockClientWithDriver(t, "postgres")
+	defer cleanup()
+
+	mock.ExpectExec(regexp.QuoteMeta("INSERT INTO users (id, name, created_at) VALUES ($1, $2, $3) ON CONFLICT (id) DO UPDATE SET name = $4, updated_at = $5")).
+		WithArgs(int64(7), "Yusuke", "created", "Yusuke", "updated").
+		WillReturnResult(sqlmock.NewResult(1, 1))
+
+	user := upsertTaggedUser{
+		ID:        7,
+		Name:      "Yusuke",
+		CreatedAt: "created",
+		UpdatedAt: "updated",
+		Ignored:   "ignored",
+	}
+	if err := client.CreateOrUpdate(context.Background(), &user); err != nil {
+		t.Fatalf("CreateOrUpdate returned error: %v", err)
+	}
+	assertExpectations(t, mock)
+}
+
+func TestCreateOrUpdatePostgresCompositePrimaryKey(t *testing.T) {
+	client, mock, cleanup := newMockClientWithDriver(t, "postgres")
+	defer cleanup()
+
+	mock.ExpectExec(regexp.QuoteMeta("INSERT INTO memberships (org_id, user_id, role) VALUES ($1, $2, $3) ON CONFLICT (org_id, user_id) DO UPDATE SET role = $4")).
+		WithArgs(int64(10), int64(20), "owner", "owner").
+		WillReturnResult(sqlmock.NewResult(1, 1))
+
+	model := membership{OrgID: 10, UserID: 20, Role: "owner"}
+	if err := client.CreateOrUpdate(context.Background(), &model); err != nil {
+		t.Fatalf("CreateOrUpdate returned error: %v", err)
+	}
+	assertExpectations(t, mock)
+}
+
+func TestCreateOrUpdatePostgresDoesNothingWhenNoUpdateColumns(t *testing.T) {
+	client, mock, cleanup := newMockClientWithDriver(t, "postgres")
+	defer cleanup()
+
+	mock.ExpectExec(regexp.QuoteMeta("INSERT INTO users (id) VALUES ($1) ON CONFLICT (id) DO NOTHING")).
+		WithArgs(int64(1)).
+		WillReturnResult(sqlmock.NewResult(1, 0))
+
+	user := primaryOnlyUser{ID: 1}
+	if err := client.CreateOrUpdate(context.Background(), &user); err != nil {
+		t.Fatalf("CreateOrUpdate returned error: %v", err)
+	}
+	assertExpectations(t, mock)
+}
+
+func TestCreateOrUpdateMySQLNoOpWhenNoUpdateColumns(t *testing.T) {
+	client, mock, cleanup := newMockClientWithDriver(t, "mysql")
+	defer cleanup()
+
+	mock.ExpectExec(regexp.QuoteMeta("INSERT INTO users (id) VALUES (?) ON DUPLICATE KEY UPDATE id = id")).
+		WithArgs(int64(1)).
+		WillReturnResult(sqlmock.NewResult(1, 0))
+
+	user := primaryOnlyUser{ID: 1}
 	if err := client.CreateOrUpdate(context.Background(), &user); err != nil {
 		t.Fatalf("CreateOrUpdate returned error: %v", err)
 	}
@@ -288,6 +405,10 @@ func TestModelRejectsAmbiguousFieldLookup(t *testing.T) {
 }
 
 func newMockClient(t *testing.T) (*Client, sqlmock.Sqlmock, func()) {
+	return newMockClientWithDriver(t, "sqlmock")
+}
+
+func newMockClientWithDriver(t *testing.T, driverName string) (*Client, sqlmock.Sqlmock, func()) {
 	t.Helper()
 
 	db, mock, err := sqlmock.New()
@@ -295,7 +416,7 @@ func newMockClient(t *testing.T) (*Client, sqlmock.Sqlmock, func()) {
 		t.Fatalf("failed to create sqlmock: %v", err)
 	}
 
-	sqlxDB := sqlx.NewDb(db, "sqlmock")
+	sqlxDB := sqlx.NewDb(db, driverName)
 	cleanup := func() {
 		_ = sqlxDB.Close()
 	}
