@@ -136,7 +136,7 @@ func Limit(limit int) QueryOption {
 	})
 }
 
-// Offset adds an OFFSET clause.
+// Offset adds an OFFSET clause. MySQL requires Limit to be specified as well.
 func Offset(offset int) QueryOption {
 	return queryOptionFunc(func(options *queryOptions) error {
 		if offset < 0 {
@@ -173,7 +173,11 @@ func (options queryOptions) validateMutation() error {
 	return nil
 }
 
-func buildSelect(info *modelInfo, options queryOptions) (string, []any, error) {
+func buildSelect(info *modelInfo, options queryOptions, dialect dialect) (string, []any, error) {
+	if dialect == dialectMySQL && options.offset != nil && options.limit == nil {
+		return "", nil, fmt.Errorf("%w: Offset without Limit is not supported by MySQL", ErrUnsupportedOption)
+	}
+
 	query := fmt.Sprintf("SELECT %s FROM %s", strings.Join(info.selectColumns(), ", "), info.table)
 	where, args, err := buildWhere(info, options.filters)
 	if err != nil {

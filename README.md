@@ -80,6 +80,8 @@ err = client.Delete(ctx, &user)
 
 `First` loads a record by primary key. `Find` accepts field names (`Email`) or column names (`email`) in conditions. Supported predicates are `Eq`, `NotEq`, `Gt`, `Gte`, `Lt`, `Lte`, `Like`, `In`, `NotIn`, `IsNull`, and `IsNotNull`.
 
+Exported anonymous structs are treated as embedded model fields. Fields without a `db` tag use the snake_case field name as their column name, such as `CreatedAt` -> `created_at`.
+
 ## Nullable columns
 
 Use `database/sql` nullable types or pointer fields for nullable columns.
@@ -158,4 +160,5 @@ err := client.Transaction(ctx, func(tx *sqlrud.Client) error {
 - `CreateOrUpdate` uses a database-native atomic upsert for PostgreSQL and MySQL. If the primary key is zero, it performs `Create`.
 - `CreateOrUpdate` requires the database to enforce the relevant primary or unique key constraint. PostgreSQL uses the model primary key as the conflict target; MySQL may update on any primary or unique key conflict.
 - `CreateOrUpdate` returns `ErrUnsupportedDialect` for unsupported drivers.
+- MySQL requires `Limit` when `Offset` is used.
 - SQL identifiers come from struct metadata and are validated before query execution.

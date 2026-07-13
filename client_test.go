@@ -63,6 +63,38 @@ func (primaryOnlyUser) TableName() string {
 	return "users"
 }
 
+type untaggedUser struct {
+	ID        int64
+	CreatedAt string
+}
+
+func (untaggedUser) TableName() string {
+	return "users"
+}
+
+type EmbeddedFields struct {
+	ID        int64  `db:"id,auto_increment,primary_key"`
+	CreatedAt string `db:"created_at,omitempty"`
+}
+
+type embeddedUser struct {
+	*EmbeddedFields
+	Name string `db:"name"`
+}
+
+func (embeddedUser) TableName() string {
+	return "users"
+}
+
+type privateEmbeddedFields struct {
+	ID int64 `db:"id,primary_key"`
+}
+
+type privateEmbeddedUser struct {
+	privateEmbeddedFields
+	Name string `db:"name"`
+}
+
 func TestFirst(t *testing.T) {
 	client, mock, cleanup := newMockClient(t)
 	defer cleanup()
@@ -93,6 +125,55 @@ func TestFirstRequiresPrimaryKeyValue(t *testing.T) {
 	}
 }
 
+func TestFirstScansUntaggedFieldsWithSnakeCaseNames(t *testing.T) {
+	client, mock, cleanup := newMockClient(t)
+	defer cleanup()
+
+	rows := sqlmock.NewRows([]string{"id", "created_at"}).AddRow(int64(1), "2026-07-13")
+	mock.ExpectQuery(regexp.QuoteMeta("SELECT id, created_at FROM users WHERE id = ? LIMIT ?")).
+		WithArgs(int64(1), 1).
+		WillReturnRows(rows)
+
+	user := untaggedUser{ID: 1}
+	if err := client.First(context.Background(), &user); err != nil {
+		t.Fatalf("First returned error: %v", err)
+	}
+	if user.CreatedAt != "2026-07-13" {
+		t.Fatalf("expected CreatedAt to be scanned, got %+v", user)
+	}
+	assertExpectations(t, mock)
+}
+
+func TestFirstUsesFieldsFromEmbeddedStruct(t *testing.T) {
+	client, mock, cleanup := newMockClient(t)
+	defer cleanup()
+
+	rows := sqlmock.NewRows([]string{"id", "created_at", "name"}).AddRow(int64(1), "2026-07-13", "Yusuke")
+	mock.ExpectQuery(regexp.QuoteMeta("SELECT id, created_at, name FROM users WHERE id = ? LIMIT ?")).
+		WithArgs(int64(1), 1).
+		WillReturnRows(rows)
+
+	user := embeddedUser{EmbeddedFields: &EmbeddedFields{ID: 1}}
+	if err := client.First(context.Background(), &user); err != nil {
+		t.Fatalf("First returned error: %v", err)
+	}
+	if user.ID != 1 || user.CreatedAt != "2026-07-13" || user.Name != "Yusuke" {
+		t.Fatalf("unexpected user: %+v", user)
+	}
+	assertExpectations(t, mock)
+}
+
+func TestModelRejectsUnexportedEmbeddedStruct(t *testing.T) {
+	client, _, cleanup := newMockClient(t)
+	defer cleanup()
+
+	user := privateEmbeddedUser{privateEmbeddedFields: privateEmbeddedFields{ID: 1}}
+	err := client.First(context.Background(), &user)
+	if !errors.Is(err, ErrInvalidModel) {
+		t.Fatalf("expected ErrInvalidModel, got %v", err)
+	}
+}
+
 func TestFind(t *testing.T) {
 	client, mock, cleanup := newMockClient(t)
 	defer cleanup()
@@ -115,6 +196,49 @@ func TestFind(t *testing.T) {
 	assertExpectations(t, mock)
 }
 
+func TestFindRejectsMySQLOffsetWithoutLimit(t *testing.T) {
+	client, _, cleanup := newMockClientWithDriver(t, "mysql")
+	defer cleanup()
+
+	var users []testUser
+	err := client.Find(context.Background(), &users, Offset(10))
+	if !errors.Is(err, ErrUnsupportedOption) {
+		t.Fatalf("expected ErrUnsupportedOption, got %v", err)
+	}
+}
+
+func TestFindAllowsMySQLLimitWithOffset(t *testing.T) {
+	client, mock, cleanup := newMockClientWithDriver(t, "mysql")
+	defer cleanup()
+
+	rows := sqlmock.NewRows([]string{"id", "name", "email"})
+	mock.ExpectQuery(regexp.QuoteMeta("SELECT id, name, email FROM users LIMIT ? OFFSET ?")).
+		WithArgs(20, 10).
+		WillReturnRows(rows)
+
+	var users []testUser
+	if err := client.Find(context.Background(), &users, Limit(20), Offset(10)); err != nil {
+		t.Fatalf("Find returned error: %v", err)
+	}
+	assertExpectations(t, mock)
+}
+
+func TestFindAllowsPostgresOffsetWithoutLimit(t *testing.T) {
+	client, mock, cleanup := newMockClientWithDriver(t, "postgres")
+	defer cleanup()
+
+	rows := sqlmock.NewRows([]string{"id", "name", "email"})
+	mock.ExpectQuery(regexp.QuoteMeta("SELECT id, name, email FROM users OFFSET $1")).
+		WithArgs(10).
+		WillReturnRows(rows)
+
+	var users []testUser
+	if err := client.Find(context.Background(), &users, Offset(10)); err != nil {
+		t.Fatalf("Find returned error: %v", err)
+	}
+	assertExpectations(t, mock)
+}
+
 func TestCreate(t *testing.T) {
 	client, mock, cleanup := newMockClient(t)
 	defer cleanup()
@@ -124,6 +248,21 @@ func TestCreate(t *testing.T) {
 		WillReturnResult(sqlmock.NewResult(1, 1))
 
 	user := testUser{Name: "Yusuke", Email: "y@example.com"}
+	if err := client.Create(context.Background(), &user); err != nil {
+		t.Fatalf("Create returned error: %v", err)
+	}
+	assertExpectations(t, mock)
+}
+
+func TestCreateHandlesNilEmbeddedStructPointer(t *testing.T) {
+	client, mock, cleanup := newMockClient(t)
+	defer cleanup()
+
+	mock.ExpectExec(regexp.QuoteMeta("INSERT INTO users (name) VALUES (?)")).
+		WithArgs("Yusuke").
+		WillReturnResult(sqlmock.NewResult(1, 1))
+
+	user := embeddedUser{Name: "Yusuke"}
 	if err := client.Create(context.Background(), &user); err != nil {
 		t.Fatalf("Create returned error: %v", err)
 	}

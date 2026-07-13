@@ -17,6 +17,7 @@ type fieldInfo struct {
 	name       string
 	column     string
 	index      []int
+	typ        reflect.Type
 	primary    bool
 	auto       bool
 	readOnly   bool
@@ -153,48 +154,8 @@ func buildModelInfo(typ reflect.Type) (*modelInfo, error) {
 	}
 	columns := make(map[string]fieldInfo)
 
-	for index := 0; index < typ.NumField(); index++ {
-		field := typ.Field(index)
-		if !field.IsExported() {
-			continue
-		}
-		if field.Anonymous && field.Tag.Get("db") == "" {
-			continue
-		}
-
-		dbTag := parseDBTag(field.Tag.Get("db"))
-		compatOptions := parseTagOptions(field.Tag.Get("sqlrud"))
-		if dbTag.ignored || compatOptions.has("-") {
-			continue
-		}
-
-		column := columnNameForField(field, dbTag)
-		if !validIdentifier(column) {
-			return nil, fmt.Errorf("%w: column %q", ErrInvalidIdentifier, column)
-		}
-		columnKey := strings.ToLower(column)
-		if existing, ok := columns[columnKey]; ok {
-			return nil, fmt.Errorf("%w: %s used by %s and %s", ErrDuplicateColumn, column, existing.name, field.Name)
-		}
-
-		options := dbTag.options.merge(compatOptions)
-		fieldInfo := fieldInfo{
-			name:       field.Name,
-			column:     column,
-			index:      field.Index,
-			primary:    options.has("pk", "primary", "primary_key"),
-			auto:       options.has("auto", "auto_increment"),
-			readOnly:   options.has("readonly", "read_only"),
-			createOnly: options.has("createonly", "create_only"),
-			updateOnly: options.has("updateonly", "update_only"),
-			omitEmpty:  options.has("omitempty", "omit_empty"),
-		}
-
-		columns[columnKey] = fieldInfo
-		info.fields = append(info.fields, fieldInfo)
-		if fieldInfo.primary {
-			info.primary = append(info.primary, fieldInfo)
-		}
+	if err := appendModelFields(info, typ, nil, columns, make(map[reflect.Type]bool)); err != nil {
+		return nil, err
 	}
 
 	if len(info.primary) == 0 {
@@ -217,6 +178,87 @@ func buildModelInfo(typ reflect.Type) (*modelInfo, error) {
 	}
 
 	return info, nil
+}
+
+func appendModelFields(info *modelInfo, typ reflect.Type, prefix []int, columns map[string]fieldInfo, ancestors map[reflect.Type]bool) error {
+	if ancestors[typ] {
+		return nil
+	}
+	ancestors[typ] = true
+	defer delete(ancestors, typ)
+
+	for index := 0; index < typ.NumField(); index++ {
+		field := typ.Field(index)
+		if field.Anonymous && !field.IsExported() && field.Tag.Get("db") == "" && field.Tag.Get("sqlrud") == "" {
+			embeddedType := field.Type
+			for embeddedType.Kind() == reflect.Pointer {
+				embeddedType = embeddedType.Elem()
+			}
+			if embeddedType.Kind() == reflect.Struct {
+				return fmt.Errorf("%w: embedded field %s must be exported", ErrInvalidModel, field.Name)
+			}
+		}
+		if !field.IsExported() {
+			continue
+		}
+
+		if field.Anonymous && field.Tag.Get("db") == "" && field.Tag.Get("sqlrud") == "" {
+			embeddedType := field.Type
+			for embeddedType.Kind() == reflect.Pointer {
+				embeddedType = embeddedType.Elem()
+			}
+			if embeddedType.Kind() == reflect.Struct {
+				if err := appendModelFields(info, embeddedType, appendFieldIndex(prefix, field.Index), columns, ancestors); err != nil {
+					return err
+				}
+			}
+			continue
+		}
+
+		dbTag := parseDBTag(field.Tag.Get("db"))
+		compatOptions := parseTagOptions(field.Tag.Get("sqlrud"))
+		if dbTag.ignored || compatOptions.has("-") {
+			continue
+		}
+
+		column := columnNameForField(field, dbTag)
+		if !validIdentifier(column) {
+			return fmt.Errorf("%w: column %q", ErrInvalidIdentifier, column)
+		}
+		columnKey := strings.ToLower(column)
+		if existing, ok := columns[columnKey]; ok {
+			return fmt.Errorf("%w: %s used by %s and %s", ErrDuplicateColumn, column, existing.name, field.Name)
+		}
+
+		options := dbTag.options.merge(compatOptions)
+		fieldInfo := fieldInfo{
+			name:       field.Name,
+			column:     column,
+			index:      appendFieldIndex(prefix, field.Index),
+			typ:        field.Type,
+			primary:    options.has("pk", "primary", "primary_key"),
+			auto:       options.has("auto", "auto_increment"),
+			readOnly:   options.has("readonly", "read_only"),
+			createOnly: options.has("createonly", "create_only"),
+			updateOnly: options.has("updateonly", "update_only"),
+			omitEmpty:  options.has("omitempty", "omit_empty"),
+		}
+
+		columns[columnKey] = fieldInfo
+		info.fields = append(info.fields, fieldInfo)
+		if fieldInfo.primary {
+			info.primary = append(info.primary, fieldInfo)
+		}
+	}
+
+	return nil
+}
+
+func appendFieldIndex(prefix []int, index []int) []int {
+	fieldIndex := make([]int, 0, len(prefix)+len(index))
+	fieldIndex = append(fieldIndex, prefix...)
+	fieldIndex = append(fieldIndex, index...)
+	return fieldIndex
 }
 
 func tableNameForType(typ reflect.Type) string {
@@ -388,4 +430,17 @@ func toSnakeCase(value string) string {
 
 func isZero(value reflect.Value) bool {
 	return value.IsZero()
+}
+
+func fieldValueForModel(value reflect.Value, field fieldInfo) reflect.Value {
+	for _, index := range field.index {
+		for value.Kind() == reflect.Pointer {
+			if value.IsNil() {
+				return reflect.Zero(field.typ)
+			}
+			value = value.Elem()
+		}
+		value = value.Field(index)
+	}
+	return value
 }

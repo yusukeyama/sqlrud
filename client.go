@@ -25,9 +25,12 @@ func New(db *sqlx.DB) *Client {
 		panic("sqlrud: nil *sqlx.DB")
 	}
 	driverName := db.DriverName()
+	// Use a private sqlx wrapper so sqlrud's field mapping does not mutate the caller's DB.
+	mappedDB := sqlx.NewDb(db.DB, driverName)
+	mappedDB.MapperFunc(toSnakeCase)
 	return &Client{
-		db:       db,
-		ext:      db,
+		db:       mappedDB,
+		ext:      mappedDB,
 		bindType: sqlx.BindType(driverName),
 		dialect:  dialectForDriver(driverName),
 	}
@@ -66,7 +69,7 @@ func (client *Client) Find(ctx context.Context, destination any, options ...Quer
 		return err
 	}
 
-	query, args, err := buildSelect(info, queryOptions)
+	query, args, err := buildSelect(info, queryOptions, client.dialect)
 	if err != nil {
 		return err
 	}
@@ -319,7 +322,7 @@ func createColumns(info *modelInfo, value reflect.Value) ([]string, []any) {
 			continue
 		}
 
-		fieldValue := value.FieldByIndex(field.index)
+		fieldValue := fieldValueForModel(value, field)
 		if field.auto && isZero(fieldValue) {
 			continue
 		}
@@ -341,7 +344,7 @@ func updateColumns(info *modelInfo, value reflect.Value) ([]string, []any) {
 			continue
 		}
 
-		fieldValue := value.FieldByIndex(field.index)
+		fieldValue := fieldValueForModel(value, field)
 		if field.omitEmpty && isZero(fieldValue) {
 			continue
 		}
@@ -379,7 +382,7 @@ func primaryFilters(info *modelInfo, value reflect.Value) ([]string, []any, bool
 	filters := make([]string, 0, len(info.primary))
 	args := make([]any, 0, len(info.primary))
 	for _, field := range info.primary {
-		fieldValue := value.FieldByIndex(field.index)
+		fieldValue := fieldValueForModel(value, field)
 		if isZero(fieldValue) {
 			return nil, nil, false, nil
 		}
