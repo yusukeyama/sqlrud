@@ -77,6 +77,12 @@ func (client *Client) Find(ctx context.Context, destination any, options ...Quer
 	return sqlx.SelectContext(ctx, client.ext, destination, client.rebind(query), args...)
 }
 
+// Query executes query exactly as provided and returns its rows.
+// The caller must close the returned rows. Placeholders must use the database's native syntax.
+func (client *Client) Query(ctx context.Context, query string, args ...any) (*sqlx.Rows, error) {
+	return client.ext.QueryxContext(ctx, query, args...)
+}
+
 // Create inserts model.
 func (client *Client) Create(ctx context.Context, model any) error {
 	info, value, err := modelInfoForValue(model)

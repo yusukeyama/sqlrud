@@ -82,6 +82,42 @@ err = client.Delete(ctx, &user)
 
 Exported anonymous structs are treated as embedded model fields. Fields without a `db` tag use the snake_case field name as their column name, such as `CreatedAt` -> `created_at`.
 
+## Raw queries
+
+Use `Query` for joins, aggregates, CTEs, and other reads that are not represented by the model CRUD API. The SQL is executed exactly as provided without model metadata parsing or placeholder rebinding.
+
+```go
+type UserPost struct {
+	UserID    int64  `db:"user_id"`
+	PostTitle string `db:"post_title"`
+}
+
+rows, err := client.Query(ctx, `
+	SELECT u.id AS user_id, p.title AS post_title
+	FROM users u
+	JOIN posts p ON p.user_id = u.id
+	WHERE u.id = $1
+`, userID)
+if err != nil {
+	return err
+}
+defer rows.Close()
+
+var results []UserPost
+for rows.Next() {
+	var result UserPost
+	if err := rows.StructScan(&result); err != nil {
+		return err
+	}
+	results = append(results, result)
+}
+if err := rows.Err(); err != nil {
+	return err
+}
+```
+
+The caller must close the returned rows. Use database-native placeholders, such as `$1` for PostgreSQL or `?` for MySQL. Query arguments should be passed separately rather than interpolated into SQL. `Query` also uses the active transaction when called on the client passed to `Transaction`.
+
 ## Nullable columns
 
 Use `database/sql` nullable types or pointer fields for nullable columns.
