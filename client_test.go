@@ -95,6 +95,11 @@ type privateEmbeddedUser struct {
 	Name string `db:"name"`
 }
 
+type joinedUserPost struct {
+	UserID    int64  `db:"user_id"`
+	PostTitle string `db:"post_title"`
+}
+
 func TestFirst(t *testing.T) {
 	client, mock, cleanup := newMockClient(t)
 	defer cleanup()
@@ -235,6 +240,76 @@ func TestFindAllowsPostgresOffsetWithoutLimit(t *testing.T) {
 	var users []testUser
 	if err := client.Find(context.Background(), &users, Offset(10)); err != nil {
 		t.Fatalf("Find returned error: %v", err)
+	}
+	assertExpectations(t, mock)
+}
+
+func TestQueryExecutesSQLExactlyAsProvided(t *testing.T) {
+	client, mock, cleanup := newMockClientWithDriver(t, "postgres")
+	defer cleanup()
+
+	query := "SELECT u.id AS user_id, p.title AS post_title FROM users u JOIN posts p ON p.user_id = u.id WHERE u.id = $1 AND p.metadata ? $2"
+	rows := sqlmock.NewRows([]string{"user_id", "post_title"}).AddRow(int64(1), "First post")
+	mock.ExpectQuery(regexp.QuoteMeta(query)).
+		WithArgs(int64(1), "published").
+		WillReturnRows(rows)
+
+	queryRows, err := client.Query(context.Background(), query, int64(1), "published")
+	if err != nil {
+		t.Fatalf("Query returned error: %v", err)
+	}
+	defer queryRows.Close()
+
+	if !queryRows.Next() {
+		t.Fatal("expected one row")
+	}
+	var result joinedUserPost
+	if err := queryRows.StructScan(&result); err != nil {
+		t.Fatalf("StructScan returned error: %v", err)
+	}
+	if result.UserID != 1 || result.PostTitle != "First post" {
+		t.Fatalf("unexpected query result: %+v", result)
+	}
+	if queryRows.Next() {
+		t.Fatal("expected only one row")
+	}
+	if err := queryRows.Err(); err != nil {
+		t.Fatalf("rows returned error: %v", err)
+	}
+	assertExpectations(t, mock)
+}
+
+func TestQueryUsesTransaction(t *testing.T) {
+	client, mock, cleanup := newMockClient(t)
+	defer cleanup()
+
+	mock.ExpectBegin()
+	mock.ExpectQuery(regexp.QuoteMeta("SELECT name FROM users WHERE id = ?")).
+		WithArgs(int64(1)).
+		WillReturnRows(sqlmock.NewRows([]string{"name"}).AddRow("Yusuke"))
+	mock.ExpectCommit()
+
+	err := client.Transaction(context.Background(), func(tx *Client) error {
+		rows, err := tx.Query(context.Background(), "SELECT name FROM users WHERE id = ?", int64(1))
+		if err != nil {
+			return err
+		}
+		defer rows.Close()
+
+		if !rows.Next() {
+			return errors.New("expected one row")
+		}
+		var name string
+		if err := rows.Scan(&name); err != nil {
+			return err
+		}
+		if name != "Yusuke" {
+			return errors.New("unexpected name")
+		}
+		return rows.Err()
+	})
+	if err != nil {
+		t.Fatalf("Transaction returned error: %v", err)
 	}
 	assertExpectations(t, mock)
 }
