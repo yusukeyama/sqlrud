@@ -11,6 +11,7 @@ var (
 	ErrMissingPrimaryKey   = errors.New("sqlrud: model has no primary key")
 	ErrMissingPrimaryValue = errors.New("sqlrud: primary key value is empty")
 	ErrMissingWhere        = errors.New("sqlrud: update or delete requires conditions or a primary key value")
+	ErrPrimaryKeyWithWhere = errors.New("sqlrud: update or delete cannot combine a primary key value with Where conditions")
 	ErrNoColumns           = errors.New("sqlrud: no writable columns")
 	ErrUnknownField        = errors.New("sqlrud: unknown field")
 	ErrEmptyIn             = errors.New("sqlrud: IN predicate requires at least one value")

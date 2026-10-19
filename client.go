@@ -194,9 +194,13 @@ func (client *Client) Transaction(ctx context.Context, fn func(*Client) error) e
 }
 
 // TransactionOptions runs fn in a transaction using options.
+// When called on a client that is already in a transaction, fn joins that transaction and options are ignored.
 func (client *Client) TransactionOptions(ctx context.Context, options *sql.TxOptions, fn func(*Client) error) (err error) {
 	if fn == nil {
 		return fmt.Errorf("sqlrud: transaction function is nil")
+	}
+	if _, ok := client.ext.(*sqlx.Tx); ok {
+		return fn(client)
 	}
 
 	tx, err := client.db.BeginTxx(ctx, options)
@@ -367,6 +371,10 @@ func mutationWhere(info *modelInfo, value reflect.Value, options queryOptions) (
 	}
 
 	if len(options.filters) > 0 {
+		// Reject a set primary key so Where never silently widens a mutation meant for one row.
+		if hasPrimaryValue(info, value) {
+			return "", nil, ErrPrimaryKeyWithWhere
+		}
 		return buildWhere(info, options.filters)
 	}
 
@@ -378,6 +386,15 @@ func mutationWhere(info *modelInfo, value reflect.Value, options queryOptions) (
 		return "", nil, ErrMissingWhere
 	}
 	return strings.Join(filters, " AND "), args, nil
+}
+
+func hasPrimaryValue(info *modelInfo, value reflect.Value) bool {
+	for _, field := range info.primary {
+		if !isZero(fieldValueForModel(value, field)) {
+			return true
+		}
+	}
+	return false
 }
 
 func primaryFilters(info *modelInfo, value reflect.Value) ([]string, []any, bool, error) {

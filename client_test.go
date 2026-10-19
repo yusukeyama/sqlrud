@@ -385,6 +385,18 @@ func TestUpdateAllowsWhereOption(t *testing.T) {
 	assertExpectations(t, mock)
 }
 
+func TestUpdateRejectsPrimaryKeyWithWhere(t *testing.T) {
+	client, mock, cleanup := newMockClient(t)
+	defer cleanup()
+
+	user := testUser{ID: 1, Name: "Yusuke", Email: "new@example.com"}
+	err := client.Update(context.Background(), &user, Where("Email", Eq("old@example.com")))
+	if !errors.Is(err, ErrPrimaryKeyWithWhere) {
+		t.Fatalf("expected ErrPrimaryKeyWithWhere, got %v", err)
+	}
+	assertExpectations(t, mock)
+}
+
 func TestCreateOrUpdateUsesPostgresAtomicUpsert(t *testing.T) {
 	client, mock, cleanup := newMockClientWithDriver(t, "postgres")
 	defer cleanup()
@@ -545,6 +557,42 @@ func TestDeleteAllowsWhereOption(t *testing.T) {
 	var user testUser
 	if err := client.Delete(context.Background(), &user, Where("Email", Eq("y@example.com"))); err != nil {
 		t.Fatalf("Delete returned error: %v", err)
+	}
+	assertExpectations(t, mock)
+}
+
+func TestDeleteRejectsPartialCompositePrimaryKeyWithWhere(t *testing.T) {
+	client, mock, cleanup := newMockClient(t)
+	defer cleanup()
+
+	err := client.Delete(context.Background(), &membership{OrgID: 1}, Where("Role", Eq("guest")))
+	if !errors.Is(err, ErrPrimaryKeyWithWhere) {
+		t.Fatalf("expected ErrPrimaryKeyWithWhere, got %v", err)
+	}
+	assertExpectations(t, mock)
+}
+
+func TestNestedTransactionJoinsOuterTransaction(t *testing.T) {
+	client, mock, cleanup := newMockClient(t)
+	defer cleanup()
+
+	expectedErr := errors.New("stop")
+	mock.ExpectBegin()
+	mock.ExpectExec(regexp.QuoteMeta("INSERT INTO users (name, email) VALUES (?, ?)")).
+		WithArgs("Yusuke", "y@example.com").
+		WillReturnResult(sqlmock.NewResult(1, 1))
+	mock.ExpectRollback()
+
+	err := client.Transaction(context.Background(), func(tx *Client) error {
+		if err := tx.Transaction(context.Background(), func(inner *Client) error {
+			return inner.Create(context.Background(), &testUser{Name: "Yusuke", Email: "y@example.com"})
+		}); err != nil {
+			return err
+		}
+		return expectedErr
+	})
+	if !errors.Is(err, expectedErr) {
+		t.Fatalf("expected rollback error %v, got %v", expectedErr, err)
 	}
 	assertExpectations(t, mock)
 }

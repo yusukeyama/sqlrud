@@ -1,0 +1,40 @@
+name: Security
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  schedule:
+    - cron: "17 3 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  govulncheck:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-go@v7
+        with:
+          go-version: stable
+          cache-dependency-path: go.sum
+
+      - run: go run golang.org/x/vuln/cmd/govulncheck@v1.8.0 ./...
+
+  gosec:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v7
+
+      # gosec v2.29.0 cannot read Go 1.27 export data yet; move to stable once it can.
+      - uses: actions/setup-go@v7
+        with:
+          go-version: "1.26.x"
+          cache-dependency-path: go.sum
+
+      - run: go run github.com/securego/gosec/v2/cmd/gosec@v2.29.0 ./...
