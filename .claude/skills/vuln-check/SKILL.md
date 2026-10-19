@@ -18,8 +18,10 @@ column names, operators, ORDER BY direction, upsert clauses) with
 ## Steps
 
 1. Run the automated tools and keep their output for the report:
-   - `go run golang.org/x/vuln/cmd/govulncheck@v1.1.4 ./...`
-   - `go run github.com/securego/gosec/v2/cmd/gosec@v2.22.0 ./...`
+   - `go run golang.org/x/vuln/cmd/govulncheck@v1.8.0 ./...`
+   - `go run github.com/securego/gosec/v2/cmd/gosec@v2.29.0 ./...`
+     (gosec needs Go 1.26 or earlier; with a newer local Go, prefix
+     `GOTOOLCHAIN=go1.26.9`)
    - `go vet ./...` and `go test -race ./...`
 
    If a tool cannot run (for example the vulnerability DB is unreachable),
