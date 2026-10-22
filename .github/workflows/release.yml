@@ -1,0 +1,94 @@
+name: Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Version to release, such as v0.7.0"
+        required: true
+        type: string
+      title:
+        description: "Release title. Defaults to the version."
+        required: false
+        type: string
+      notes:
+        description: "Release notes in Markdown. Leave empty to generate them from merged pull requests."
+        required: false
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+jobs:
+  release:
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+
+    permissions:
+      contents: write
+
+    env:
+      GOTOOLCHAIN: local
+      VERSION: ${{ inputs.version }}
+      TITLE: ${{ inputs.title }}
+      NOTES: ${{ inputs.notes }}
+
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: Validate version
+        id: validate
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if ! [[ "$VERSION" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::error::version must look like v1.2.3, got '$VERSION'"
+            exit 1
+          fi
+          if git rev-parse -q --verify "refs/tags/$VERSION" >/dev/null; then
+            # Allow a rerun that pushed the tag but failed to create the release.
+            if [[ "$(git rev-parse "$VERSION^{commit}")" != "$GITHUB_SHA" ]]; then
+              echo "::error::tag $VERSION already exists on another commit"
+              exit 1
+            fi
+            if gh release view "$VERSION" >/dev/null 2>&1; then
+              echo "::error::release $VERSION already exists"
+              exit 1
+            fi
+            echo "tag_exists=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+          cache-dependency-path: go.sum
+
+      - run: go vet ./...
+      - run: go test -race ./...
+
+      - name: Create tag
+        if: steps.validate.outputs.tag_exists != 'true'
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898283+github-actions[bot]@users.noreply.github.com"
+          git tag -a "$VERSION" -m "${TITLE:-$VERSION}" "$GITHUB_SHA"
+          git push origin "refs/tags/$VERSION"
+
+      - name: Create release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          args=(--title "${TITLE:-$VERSION}" --verify-tag)
+          if [[ -n "$NOTES" ]]; then
+            printf '%s\n' "$NOTES" > "$RUNNER_TEMP/notes.md"
+            args+=(--notes-file "$RUNNER_TEMP/notes.md")
+          else
+            args+=(--generate-notes)
+          fi
+          gh release create "$VERSION" "${args[@]}"
